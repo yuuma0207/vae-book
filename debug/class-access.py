@@ -1,15 +1,16 @@
 import torch
 from torch import nn
 
+
 class DebugModule(nn.Module):
     def __init__(self):
         print(">>> __init__ invoked")
         super().__init__()
-        
+
     def __call__(self, *args, **kwargs):
         print(">>> __call__ invoked")
         return super().__call__(*args, **kwargs)
-    
+
     def forward(self, x):
         print(">>> forward invoked")
         return x
@@ -26,13 +27,14 @@ class ConvBlock(DebugModule):
             nn.ReLU(),
             nn.Conv2d(out_ch, out_ch, 3, padding=1),
             nn.BatchNorm2d(out_ch),
-            nn.ReLU()
+            nn.ReLU(),
         )
-    
+
     def forward(self, x):
         print(f">>> ConvBlock forward invoked with input shape {x.shape}")
         return self.convs(x)
-    
+
+
 class Unet(DebugModule):
     def __init__(self, in_ch=1):
         super().__init__()
@@ -45,7 +47,7 @@ class Unet(DebugModule):
         self.out = nn.Conv2d(64, in_ch, 1)
 
         self.maxpool = nn.MaxPool2d(2)
-        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear')
+        self.upsample = nn.Upsample(scale_factor=2, mode="bilinear")
 
     def forward(self, x):
         print(f">>> Unet forward invoked with input shape {x.shape}")
@@ -69,4 +71,3 @@ model = Unet()
 x = torch.randn(10, 1, 28, 28)
 y = model(x)
 print(y.shape)
-

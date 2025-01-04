@@ -11,12 +11,13 @@ class ConvBlock(nn.Module):
             nn.ReLU(),
             nn.Conv2d(out_ch, out_ch, 3, padding=1),
             nn.BatchNorm2d(out_ch),
-            nn.ReLU()
+            nn.ReLU(),
         )
-    
+
     def forward(self, x):
         return self.convs(x)
-    
+
+
 class Unet(nn.Module):
     def __init__(self, in_ch=1):
         super().__init__()
@@ -29,7 +30,7 @@ class Unet(nn.Module):
         self.out = nn.Conv2d(64, in_ch, 1)
 
         self.maxpool = nn.MaxPool2d(2)
-        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear')
+        self.upsample = nn.Upsample(scale_factor=2, mode="bilinear")
 
     def forward(self, x):
         x1 = self.down1(x)
@@ -52,4 +53,3 @@ model = Unet()
 x = torch.randn(10, 1, 28, 28)
 y = model(x)
 print(y.shape)
-
