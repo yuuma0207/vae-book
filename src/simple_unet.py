@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 
+
 class ConvBlock(nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
@@ -46,7 +47,9 @@ class Unet(nn.Module):
         x = self.out(x)
         return x
 
+
 model = Unet()
 x = torch.randn(10, 1, 28, 28)
 y = model(x)
 print(y.shape)
+
