@@ -79,7 +79,7 @@ class UNet(nn.Module):
 
         x1 = self.down1(x, v)
         x = self.maxpool(x1)
-        x2 = self.down(x, v)
+        x2 = self.down2(x, v)
         x = self.maxpool(x2)
 
         x = self.bot1(x, v)
