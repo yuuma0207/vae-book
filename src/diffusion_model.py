@@ -1,6 +1,12 @@
-from tqdm import tqdm
+import math
+import matplotlib.pyplot as plt
 import torch
+import torchvision
+import torch.nn.functional as F
+from tqdm import tqdm
 from torch import nn
+from torch.utils.data import DataLoader
+from torch.optim import Adam
 from torchvision import transforms
 
 
@@ -50,18 +56,18 @@ class ConvBlock(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(time_embed_dim, in_ch),
             nn.ReLU(),
-            nn.Linear(in_ch, out_ch)
+            nn.Linear(in_ch, in_ch) # 最初はin_ch, out_chにしててバグらせた
         )
     
     def forward(self, x, v):
         N, C, _, _ = x.shape
         v = self.mlp(v) # multi layer perceptron
         v = v.view(N, C, 1, 1) # (N, C) -> (N, C, 1, 1) reshape
-        y = self.convs(x + v)
+        y = self.conv(x + v)
         return y
 
 class UNet(nn.Module):
-    def __init__(self, in_ch, time_embed_dim=100):
+    def __init__(self, in_ch=1, time_embed_dim=100):
         super().__init__()
         self.time_embed_dim = time_embed_dim
 
@@ -75,9 +81,9 @@ class UNet(nn.Module):
         self.maxpool = nn.MaxPool2d(2)
         self.upsample = nn.Upsample(scale_factor=2, mode='bilinear')
     
-    def forward(self, x, timestamps):
+    def forward(self, x, timesteps):
         # 正弦波エンコーディング
-        v = pos_encoding(timestamps, self.time_embed_dim, x.device)
+        v = pos_encoding(timesteps, self.time_embed_dim, x.device)
 
         x1 = self.down1(x, v)
         x = self.maxpool(x1)
@@ -96,14 +102,14 @@ class UNet(nn.Module):
         return x
     
 class Diffuser:
-    def __init__(self, num_timestamps=1000,
+    def __init__(self, num_timesteps=1000,
                 beta_start=0.0001,
                 beta_end=0.02,
                 device="cpu"):
         
-        self.num_timestamps = num_timestamps
+        self.num_timesteps = num_timesteps
         self.device = device
-        self.betas = torch.linspace(beta_start, beta_end, num_timestamps, device=device)
+        self.betas = torch.linspace(beta_start, beta_end, num_timesteps, device=device)
 
         self.alphas = 1 - self.betas
         self.alpha_bars = torch.cumprod(self.alphas, dim=0)
@@ -111,7 +117,7 @@ class Diffuser:
     def add_noise(self, x_0, t): 
         # x_0: torch.Tensor (N: batch size, C: channel, H: height, W: width) 
         # 複数のバッチデータを受け取るかもしれないのでall()を使う。画像の並列処理みたいなこと
-        T = self.num_timestamps
+        T = self.num_timesteps
         assert (t >= 1).all() and (t <= T).all()
         t_idx = t - 1
 
@@ -119,12 +125,12 @@ class Diffuser:
         N = alpha_bar.size(0)
         alpha_bar = alpha_bar.view(N, 1, 1, 1)
 
-        eps = torch.randn_like(x_0)
-        x_t = torch.sqrt(alpha_bar) * x_0 + torch.sqrt(1 - alpha_bar) * eps
-        return x_t
+        noise = torch.randn_like(x_0)
+        x_t = torch.sqrt(alpha_bar) * x_0 + torch.sqrt(1 - alpha_bar) * noise
+        return x_t, noise
     
     def denoise(self, model, x, t):
-        T = self.num_timestamps
+        T = self.num_timesteps
         assert (t >= 1).all() and (t <= T).all() # 複数のバッチデータを受け取るかもしれないのでall()を使う
 
         t_idx = t - 1
@@ -163,9 +169,76 @@ class Diffuser:
         batch_size = x_shape[0] # 生成する画像の枚数
         x = torch.randn(x_shape, device=self.device)
 
-        for i in tqdm(range(self.num_timestamps, 0, -1)):
+        for i in tqdm(range(self.num_timesteps, 0, -1)):
             t = torch.tensor([i] * batch_size, device=self.device, dtype=torch.long)
-            x = self.denoise(model, x, t)
+            x = self.denoise(model, x, t) # ワンステップのデノイズ処理を行う
 
         images = [self.reverse_to_img(x[i]) for i in range(batch_size)]
         return images
+    
+
+def show_images(images, rows=2, cols=10):
+    fig = plt.figure(figsize=(cols, rows))
+    i = 0
+    for r in range(rows):
+        for c in range(cols):
+            ax = fig.add_subplot(rows, cols, i + 1)
+            ax.imshow(images[i], cmap="gray")
+            ax.axis("off")
+            i += 1
+    plt.show()
+
+    
+img_size = 28
+batch_size = 128 # 一回の学習で128枚の画像を使う。これを指定しないと1回の学習にすべてのデータを使う。
+num_timesteps = 1000
+epochs = 10 # 学習データを何回繰り返すか。1epochで全データを使う。
+lr = 1e-3
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+preprocess = transforms.ToTensor()
+dataset = torchvision.datasets.MNIST(root="./../data", download=True, transform=preprocess)
+dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+diffuser = Diffuser(num_timesteps, device=device)
+model = UNet()
+model.to(device)
+optimizer = Adam(model.parameters(), lr=lr)
+
+losses = []
+for epoch in range(epochs):
+    loss_sum = 0.0
+    cnt = 0
+
+    # エポックごとにデータ生成して結果を確認したい場合はコメントアウト外す
+    # images = diffuser.sample(model)
+    # show_images(images)
+
+    for images, labels in tqdm(dataloader):
+        optimizer.zero_grad()
+        x = images.to(device)
+        # 各データに対してランダムな時間ステップを選択
+        # タプルとして配列の長さを渡している
+        t = torch.randint(1, num_timesteps+1, (len(x),), device=device)
+
+        x_noisy, noise = diffuser.add_noise(x, t) # 時刻tのノイズをかけたデータを生成
+        noise_pred = model(x_noisy, t) # 時刻tのノイズをニューラルネットで予測
+        loss = F.mse_loss(noise, noise_pred)
+
+        loss.backward() # back propagation
+        optimizer.step()
+
+        loss_sum += loss.item()
+        cnt += 1
+    print(cnt) # バッチサイズが128なので60000/128=468.75 -> 469になるはず
+    loss_avg = loss_sum / cnt
+    losses.append(loss_avg)
+    print(f"Epoch: {epoch+1} | Loss: {loss_avg}")
+
+plt.plot(losses)
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.show()
+
+images = diffuser.sample(model)
+show_images(images)
